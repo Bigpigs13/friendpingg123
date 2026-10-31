@@ -17,7 +17,7 @@ public final class FrozenGlow {
     public record Ghost(long createdAt, Vec3d pos, float bodyYaw, float headYaw, float pitch, float swing) {}
 
     // Розовый glow
-    private static final int[] GLOW = {255, 60, 210};
+    private static final int[] GLOW = {110, 215, 255};
     // Силуэт растёт с расстоянием медленнее кольца (чем больше число, тем меньше рост)
     private static final double GHOST_DIST_SCALE = 64.0;
     // Радиус поиска игрока вокруг метки (в блоках)
