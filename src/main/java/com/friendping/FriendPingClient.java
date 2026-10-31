@@ -10,29 +10,33 @@ import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.entity.projectile.ProjectileUtil;
 import net.minecraft.text.Text;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
-
-import java.util.Locale;
 
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.argument;
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.literal;
 
 public class FriendPingClient implements ClientModInitializer {
+    private static final double MAX_DIST = 256.0;
     private static KeyBinding pingKey;
 
     @Override
     public void onInitializeClient() {
         FriendPingState.load();
 
+        // Бинд: средняя кнопка мыши (можно сменить в настройках управления)
         pingKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.friendping.ping",
-                InputUtil.Type.KEYSYM,
-                GLFW.GLFW_KEY_G,
+                InputUtil.Type.MOUSE,
+                GLFW.GLFW_MOUSE_BUTTON_MIDDLE,
                 "category.friendping"
         ));
 
@@ -51,17 +55,36 @@ public class FriendPingClient implements ClientModInitializer {
     }
 
     private static void createPing(MinecraftClient client) {
-        if (client.player == null || client.world == null || client.crosshairTarget == null) return;
+        Entity cam = client.getCameraEntity();
+        if (client.player == null || client.world == null || cam == null) return;
 
-        HitResult hit = client.crosshairTarget;
+        Vec3d start = cam.getCameraPosVec(1.0f);
+        Vec3d dir = cam.getRotationVec(1.0f);
+        Vec3d end = start.add(dir.multiply(MAX_DIST));
+
+        // Блок на дистанции до 256
+        HitResult blockHit = cam.raycast(MAX_DIST, 1.0f, false);
+        double blockDistSq = blockHit.getType() == HitResult.Type.MISS
+                ? Double.MAX_VALUE : blockHit.getPos().squaredDistanceTo(start);
+
+        // Игрок на дистанции до 256
+        Box box = cam.getBoundingBox().stretch(dir.multiply(MAX_DIST)).expand(1.0);
+        EntityHitResult entityHit = ProjectileUtil.raycast(
+                cam, start, end, box,
+                e -> e instanceof PlayerEntity && !e.isSpectator() && e.canHit(),
+                MAX_DIST * MAX_DIST);
+
         Vec3d pos;
         String targetName = "";
 
-        if (hit.getType() == HitResult.Type.BLOCK && hit instanceof BlockHitResult blockHit) {
-            pos = Vec3d.ofCenter(blockHit.getBlockPos());
-        } else if (hit.getType() == HitResult.Type.ENTITY && hit instanceof EntityHitResult entityHit) {
+        if (entityHit != null && entityHit.getPos().squaredDistanceTo(start) < blockDistSq) {
             pos = entityHit.getEntity().getPos();
             targetName = entityHit.getEntity().getName().getString();
+        } else if (blockHit instanceof BlockHitResult bh && blockHit.getType() == HitResult.Type.BLOCK) {
+            // над блоком: центр по X/Z, верхняя грань по Y
+            pos = new Vec3d(bh.getBlockPos().getX() + 0.5,
+                    bh.getBlockPos().getY() + 1.0,
+                    bh.getBlockPos().getZ() + 0.5);
         } else {
             return;
         }
