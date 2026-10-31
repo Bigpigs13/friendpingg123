@@ -15,15 +15,20 @@ import net.minecraft.util.math.Vec3d;
 import org.joml.Matrix4f;
 
 public final class PingRenderer {
-    // Основной розово-фиолетовый неон, светлая верхушка столбиков, синее внутреннее кольцо
-    private static final int[] PINK = {255, 50, 200};
-    private static final int[] TOP = {255, 190, 255};
-    private static final int[] BLUE = {70, 130, 255};
+    // Цвета: белое ядро кольца, бирюзовое свечение, синий ореол
+    private static final int[] WHITE = {235, 250, 255};
+    private static final int[] CYAN = {90, 220, 255};
+    private static final int[] BLUE = {40, 110, 255};
 
-    private static final int SEGMENTS = 64;
-    private static final int BARS = 56;
+    private static final double TAU = Math.PI * 2.0;
+    // Количество сторон кольца (меньше число, тем заметнее многоугольник, как на референсе)
+    private static final int SEGMENTS = 40;
+    // Количество ромбиков и штрихов (каждый четвёртый это штрих)
+    private static final int SHARDS = 48;
     // Чем меньше число, тем быстрее метка растёт с расстоянием
     private static final double DIST_SCALE = 16.0;
+    // Высота тонкого светового луча над меткой (0 отключает луч)
+    private static final double BEAM_HEIGHT = 2.2;
 
     private PingRenderer() {}
 
@@ -52,29 +57,37 @@ public final class PingRenderer {
             double s = Math.max(1.0, dist / DIST_SCALE);
 
             // Пульсация
-            double beat = 0.5 + 0.5 * Math.sin(now / 260.0);
-            double radius = (0.55 + 0.07 * beat) * s;
-            double glow = 0.7 + 0.3 * beat;
+            double beat = 0.5 + 0.5 * Math.sin(now / 420.0);
+            double mul = fade * (0.85 + 0.15 * beat);
+            double radius = (0.85 + 0.05 * beat) * s;
 
             double x = ping.pos().x;
-            double y = ping.pos().y + 0.06 * s;
+            double y = ping.pos().y + 0.05 * s;
             double z = ping.pos().z;
-            double lift = 0.002 * s;
 
-            // Свечение под основным кольцом
-            ring(buf, pos, x, y, z, radius - 0.10 * s, radius + 0.16 * s, PINK, a(45, fade, glow));
-            // Основное толстое кольцо
-            ring(buf, pos, x, y + lift, z, radius - 0.03 * s, radius + 0.06 * s, PINK, a(200, fade, glow));
-            // Тонкое внутреннее синее кольцо
-            ring(buf, pos, x, y + 2 * lift, z, radius - 0.15 * s, radius - 0.12 * s, BLUE, a(230, fade, 1.0));
+            // Радиус каждой вершины кольца слегка "дрожит", чтобы контур был неровным
+            double[] rad = new double[SEGMENTS + 1];
+            for (int k = 0; k <= SEGMENTS; k++) {
+                int i = k % SEGMENTS;
+                double w = 0.5 * Math.sin(i * 2.3 + now / 700.0) + 0.5 * Math.sin(i * 5.1 - now / 530.0);
+                rad[k] = radius * (1.0 + 0.035 * w);
+            }
 
-            // Столбики-«волны» вверх
-            for (int i = 0; i < BARS; i++) {
-                double ang = Math.PI * 2.0 * i / BARS;
-                double h = (0.08 + 0.55
-                        * (0.5 + 0.5 * Math.sin(now / 170.0 + i * 1.7))
-                        * (0.5 + 0.5 * Math.sin(now / 290.0 + i * 0.9))) * s;
-                bar(buf, pos, x, y, z, ang, radius + 0.03 * s, h, 0.045 * s, a(230, fade, 1.0));
+            // Внешний мягкий ореол
+            band(buf, pos, x, y, z, rad, s, 0.0, 0.55, BLUE, a(120, mul), BLUE, 0);
+            // Внутреннее свечение у края
+            band(buf, pos, x, y, z, rad, s, -0.45, 0.0, BLUE, 0, CYAN, a(90, mul));
+            // Бирюзовая полоса
+            band(buf, pos, x, y, z, rad, s, -0.06, 0.06, CYAN, a(170, mul), CYAN, a(170, mul));
+            // Белое ядро
+            band(buf, pos, x, y, z, rad, s, -0.025, 0.025, WHITE, a(255, mul), WHITE, a(255, mul));
+
+            // Ромбики и штрихи внутри
+            shards(buf, pos, x, y, z, radius, s, now, mul);
+
+            // Тонкий световой луч
+            if (BEAM_HEIGHT > 0) {
+                beam(buf, pos, x, y, z, 0.05 * s, BEAM_HEIGHT * s, mul);
             }
         }
 
@@ -104,48 +117,105 @@ public final class PingRenderer {
         RenderSystem.enableDepthTest();
     }
 
-    private static int a(int base, double fade, double mul) {
-        return (int) Math.max(0, Math.min(255, base * fade * mul));
+    private static int a(int base, double mul) {
+        return (int) Math.max(0, Math.min(255, base * mul));
     }
 
-    // Плоское кольцо (кольцевая полоса) на высоте y
-    private static void ring(BufferBuilder buf, Matrix4f m, double cx, double y, double cz,
-                             double rIn, double rOut, int[] c, int alpha) {
-        for (int i = 0; i < SEGMENTS; i++) {
-            double a1 = Math.PI * 2.0 * i / SEGMENTS;
-            double a2 = Math.PI * 2.0 * (i + 1) / SEGMENTS;
+    // Псевдослучайное число от 0 до 1 по номеру (одинаковое каждый кадр)
+    private static double hash(int n) {
+        double x = Math.sin(n * 12.9898) * 43758.5453;
+        return x - Math.floor(x);
+    }
+
+    // Полоса вдоль кольца с градиентом: от offIn до offOut (в долях масштаба s) относительно края
+    private static void band(BufferBuilder buf, Matrix4f m, double cx, double y, double cz,
+                             double[] rad, double s, double offIn, double offOut,
+                             int[] cIn, int aIn, int[] cOut, int aOut) {
+        int n = rad.length - 1;
+        for (int k = 0; k < n; k++) {
+            double a1 = TAU * k / n;
+            double a2 = TAU * (k + 1) / n;
             double c1 = Math.cos(a1), s1 = Math.sin(a1), c2 = Math.cos(a2), s2 = Math.sin(a2);
-            double[] p1 = {cx + c1 * rIn, y, cz + s1 * rIn};
-            double[] p2 = {cx + c1 * rOut, y, cz + s1 * rOut};
-            double[] p3 = {cx + c2 * rOut, y, cz + s2 * rOut};
-            double[] p4 = {cx + c2 * rIn, y, cz + s2 * rIn};
-            quad(buf, m, p1, p2, p3, p4, c, alpha, c, alpha);
+            double r1i = Math.max(0.0, rad[k] + offIn * s);
+            double r1o = Math.max(0.0, rad[k] + offOut * s);
+            double r2i = Math.max(0.0, rad[k + 1] + offIn * s);
+            double r2o = Math.max(0.0, rad[k + 1] + offOut * s);
+            v(buf, m, new double[]{cx + c1 * r1i, y, cz + s1 * r1i}, cIn, aIn);
+            v(buf, m, new double[]{cx + c1 * r1o, y, cz + s1 * r1o}, cOut, aOut);
+            v(buf, m, new double[]{cx + c2 * r2o, y, cz + s2 * r2o}, cOut, aOut);
+            v(buf, m, new double[]{cx + c2 * r2i, y, cz + s2 * r2i}, cIn, aIn);
         }
     }
 
-    // Вертикальный столбик на кольце
-    private static void bar(BufferBuilder buf, Matrix4f m, double cx, double y, double cz,
-                            double ang, double r, double h, double halfW, int alpha) {
-        double px = cx + Math.cos(ang) * r;
-        double pz = cz + Math.sin(ang) * r;
-        double tx = -Math.sin(ang) * halfW;
-        double tz = Math.cos(ang) * halfW;
-        double[] b1 = {px - tx, y, pz - tz};
-        double[] b2 = {px + tx, y, pz + tz};
-        double[] t2 = {px + tx, y + h, pz + tz};
-        double[] t1 = {px - tx, y + h, pz - tz};
-        // снизу розовый, к верхушке светлее и прозрачнее
-        quad(buf, m, b1, b2, t2, t1, PINK, alpha, TOP, alpha / 2);
+    // Мелкие ромбики (мерцают) и штрихи (вылетают от центра к краю и гаснут)
+    private static void shards(BufferBuilder buf, Matrix4f m, double cx, double y, double cz,
+                               double radius, double s, long now, double mul) {
+        for (int i = 0; i < SHARDS; i++) {
+            double h1 = hash(i), h2 = hash(i + 1000), h3 = hash(i + 2000);
+            boolean streak = i % 4 == 0;
+            double ang, r, lift, hl, hw, alphaF;
+
+            if (streak) {
+                double period = 1100.0 + 900.0 * h3;
+                double t = (now / period + h2) % 1.0;
+                ang = h1 * TAU;
+                r = radius * (0.25 + 0.8 * t);
+                lift = (0.02 + 0.12 * t) * s;
+                hl = 0.30 * s;
+                hw = 0.018 * s;
+                alphaF = Math.sin(Math.PI * t);
+            } else {
+                ang = h1 * TAU + now / 5000.0 * (h3 - 0.5);
+                r = radius * (0.3 + 0.85 * h2);
+                lift = (0.03 + 0.10 * (0.5 + 0.5 * Math.sin(now / 500.0 + i))) * s;
+                hl = 0.07 * s;
+                hw = 0.04 * s;
+                double tw = Math.sin(now / 260.0 + h3 * 20.0);
+                alphaF = 0.35 + 0.65 * tw * tw;
+            }
+
+            int[] col = (i % 3 == 0) ? CYAN : WHITE;
+            int al = a(255, mul * alphaF);
+            if (al <= 0) continue;
+
+            double dx = Math.cos(ang), dz = Math.sin(ang);
+            double tx = -dz, tz = dx;
+            double px = cx + dx * r, pz = cz + dz * r, py = y + lift;
+
+            double[] head = {px + dx * hl, py, pz + dz * hl};
+            double[] side1 = {px + tx * hw, py, pz + tz * hw};
+            double[] tail = {px - dx * hl, py, pz - dz * hl};
+            double[] side2 = {px - tx * hw, py, pz - tz * hw};
+
+            if (streak) {
+                // голова яркая, хвост гаснет
+                v(buf, m, head, col, al);
+                v(buf, m, side1, col, (int) (al * 0.6));
+                v(buf, m, tail, col, (int) (al * 0.05));
+                v(buf, m, side2, col, (int) (al * 0.6));
+            } else {
+                v(buf, m, head, col, al);
+                v(buf, m, side1, col, al);
+                v(buf, m, tail, col, al);
+                v(buf, m, side2, col, al);
+            }
+        }
     }
 
-    // Четырёхугольник (отсечение граней выключено, виден с обеих сторон)
-    private static void quad(BufferBuilder buf, Matrix4f m,
-                             double[] p1, double[] p2, double[] p3, double[] p4,
-                             int[] c1, int a1, int[] c2, int a2) {
-        v(buf, m, p1, c1, a1);
-        v(buf, m, p2, c1, a1);
-        v(buf, m, p3, c2, a2);
-        v(buf, m, p4, c2, a2);
+    // Тонкий вертикальный луч, который тает к верхушке
+    private static void beam(BufferBuilder buf, Matrix4f m, double cx, double y, double cz,
+                             double r, double h, double mul) {
+        int sides = 8;
+        for (int k = 0; k < sides; k++) {
+            double a1 = TAU * k / sides;
+            double a2 = TAU * (k + 1) / sides;
+            double x1 = cx + Math.cos(a1) * r, z1 = cz + Math.sin(a1) * r;
+            double x2 = cx + Math.cos(a2) * r, z2 = cz + Math.sin(a2) * r;
+            v(buf, m, new double[]{x1, y, z1}, CYAN, a(90, mul));
+            v(buf, m, new double[]{x2, y, z2}, CYAN, a(90, mul));
+            v(buf, m, new double[]{x2, y + h, z2}, CYAN, 0);
+            v(buf, m, new double[]{x1, y + h, z1}, CYAN, 0);
+        }
     }
 
     private static void v(BufferBuilder buf, Matrix4f m, double[] p, int[] c, int alpha) {
