@@ -45,6 +45,7 @@ public class FriendPingClient implements ClientModInitializer {
                 createPing(client);
             }
             FriendPingState.expire();
+            FrozenGlow.update(client);
         });
 
         registerCommands();
