@@ -77,6 +77,10 @@ public final class PingRenderer {
                 bar(buf, pos, x, y, z, ang, radius + 0.03 * s, h, 0.045 * s, a(230, fade, 1.0));
             }
         }
+
+        // Застывший розовый силуэт игрока (если метка стоит на игроке)
+        FrozenGlow.draw(buf, pos, camera, now);
+
         matrices.pop();
 
         if (!any) return;
