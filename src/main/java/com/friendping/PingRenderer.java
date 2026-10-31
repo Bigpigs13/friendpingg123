@@ -6,8 +6,6 @@ import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.math.Vec3d;
-import org.joml.Matrix3f;
-import org.joml.Matrix4f;
 
 public final class PingRenderer {
     private PingRenderer() {}
@@ -23,8 +21,7 @@ public final class PingRenderer {
 
         matrices.push();
         matrices.translate(-camera.x, -camera.y, -camera.z);
-        Matrix4f position = matrices.peek().getPositionMatrix();
-        Matrix3f normal = matrices.peek().getNormalMatrix();
+        MatrixStack.Entry entry = matrices.peek();
 
         for (FriendPingState.Ping ping : FriendPingState.pings()) {
             double age = (now - ping.createdAt()) / (double) FriendPingState.PING_LIFETIME_MS;
@@ -41,21 +38,21 @@ public final class PingRenderer {
             for (int i = 0; i < 48; i++) {
                 double a1 = Math.PI * 2.0 * i / 48.0;
                 double a2 = Math.PI * 2.0 * (i + 1) / 48.0;
-                vertex(lines, position, normal, x + Math.cos(a1) * radius, y, z + Math.sin(a1) * radius, alpha);
-                vertex(lines, position, normal, x + Math.cos(a2) * radius, y, z + Math.sin(a2) * radius, alpha);
+                vertex(lines, entry, x + Math.cos(a1) * radius, y, z + Math.sin(a1) * radius, alpha);
+                vertex(lines, entry, x + Math.cos(a2) * radius, y, z + Math.sin(a2) * radius, alpha);
             }
 
             // Short, faint beacon-like vertical accent above the ring's center.
-            vertex(lines, position, normal, x, y + 0.04, z, (int) (95 * fade));
-            vertex(lines, position, normal, x, y + 0.72, z, (int) (95 * fade));
+            vertex(lines, entry, x, y + 0.04, z, (int) (95 * fade));
+            vertex(lines, entry, x, y + 0.72, z, (int) (95 * fade));
         }
         matrices.pop();
     }
 
-    private static void vertex(VertexConsumer consumer, Matrix4f position, Matrix3f normal,
+    private static void vertex(VertexConsumer consumer, MatrixStack.Entry entry,
                                double x, double y, double z, int alpha) {
-        consumer.vertex(position, (float) x, (float) y, (float) z)
+        consumer.vertex(entry, (float) x, (float) y, (float) z)
                 .color(115, 205, 232, Math.max(0, Math.min(255, alpha)))
-                .normal(normal, 0.0f, 1.0f, 0.0f);
+                .normal(entry, 0.0f, 1.0f, 0.0f);
     }
 }
